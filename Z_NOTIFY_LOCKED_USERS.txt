@@ -1,0 +1,332 @@
+*&---------------------------------------------------------------------*
+*& Report Z_NOTIFY_LOCKED_USERS_NEW_1
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT z_notify_locked_users.
+
+
+DATA: lt_users      TYPE TABLE OF usr02,
+      ls_user       TYPE usr02,
+      lt_content    TYPE soli_tab,
+      ls_content    TYPE soli,
+      lt_receivers  TYPE TABLE OF somlreci1,
+      ls_receiver   TYPE somlreci1,
+      ls_doc_data   TYPE sodocchgi1,
+      lv_message    TYPE string,
+      lv_user_email TYPE ad_smtpadr,
+      lv_addrnumber TYPE ad_addrnum,
+      lv_temp_pwd   TYPE string,
+      lv_bapipwd    LIKE bapipwd.
+
+DATA:ls_passwordx LIKE bapipwdx,
+     ls_return2   TYPE bapiret2.
+
+DATA: lv_password TYPE string VALUE '',
+      lt_upper    TYPE string VALUE 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+      lt_lower    TYPE string VALUE 'abcdefghijklmnopqrstuvwxyz',
+      lt_digit    TYPE string VALUE '0123456789',
+      lt_special  TYPE string VALUE '@#$%&*!?',
+      lt_all      TYPE string,
+      lv_rand     TYPE i,
+      lv_pos      TYPE i,
+      lv_len      TYPE i VALUE 10,
+      lv_max      TYPE i.
+
+DATA :user_unl   LIKE bapibname-bapibname,
+      lt_return  TYPE TABLE OF bapiret2,
+      lt_return2 TYPE TABLE OF bapiret2,
+      user_chg   LIKE bapibname-bapibname.
+
+
+*--- Select locked users (UFLAG = 128 - Locked Due To Incorrect Logons)
+SELECT * FROM usr02 INTO TABLE lt_users
+ WHERE uflag = '128'.
+
+*0    Not Locked
+*32   Locked Globally By Administrator
+*64   Locked Locally By Administrator
+*128  Locked Due To Incorrect Logons (Limited Term)
+
+IF sy-subrc = 0.
+  WRITE: / 'Found', sy-dbcnt, 'locked user(s).'.
+  WRITE: / '========================================'.
+
+  LOOP AT lt_users INTO ls_user.
+    CLEAR: lt_content, ls_content, lt_receivers, ls_receiver, ls_doc_data,
+           lv_user_email, lv_addrnumber, lv_temp_pwd.
+
+    WRITE: / 'Processing user:', ls_user-bname.
+
+*    *--- Get locked user's email address from ADR6
+    SELECT SINGLE persnumber FROM usr21
+      INTO lv_addrnumber
+      WHERE bname = ls_user-bname.
+
+    IF sy-subrc = 0.
+      SELECT SINGLE smtp_addr FROM adr6
+        INTO lv_user_email
+        WHERE persnumber = lv_addrnumber
+          AND flgdefault = 'X'.
+    ENDIF.
+
+    IF lv_user_email IS INITIAL.
+      WRITE: / '  Warning: No email found for user', ls_user-bname, '- skipping.'.
+      CONTINUE.
+    ENDIF.
+
+    WRITE: / '  Email found:', lv_user_email.
+
+
+*-- Combine all allowed characters
+    lt_all = lt_upper && lt_lower && lt_digit && lt_special.
+
+*-- Ensure at least one char from each class
+
+    lv_max = strlen( lt_upper ) - 1.  " Max valid offset
+
+    CALL FUNCTION 'QF05_RANDOM_INTEGER'
+      EXPORTING
+        ran_int_max = lv_max
+        ran_int_min = 1
+      IMPORTING
+        ran_int     = lv_pos.
+* EXCEPTIONS
+*   INVALID_INPUT       = 1
+*   OTHERS              = 2
+    .
+    IF sy-subrc <> 0.
+* Implement suitable error handling here
+    ENDIF.
+
+    lv_password = lv_password && lt_upper+lv_pos(1).
+
+    lv_max = strlen( lt_lower ) - 1.
+
+    CALL FUNCTION 'QF05_RANDOM_INTEGER'
+      EXPORTING
+        ran_int_max = lv_max
+        ran_int_min = 1
+      IMPORTING
+        ran_int     = lv_pos.
+* EXCEPTIONS
+*   INVALID_INPUT       = 1
+*   OTHERS              = 2
+    .
+    IF sy-subrc <> 0.
+* Implement suitable error handling here
+    ENDIF.
+
+    lv_password = lv_password && lt_lower+lv_pos(1).
+
+    lv_max = strlen( lt_digit ) - 1.
+
+    CALL FUNCTION 'QF05_RANDOM_INTEGER'
+      EXPORTING
+        ran_int_max = lv_max
+        ran_int_min = 1
+      IMPORTING
+        ran_int     = lv_pos.
+*     EXCEPTIONS
+*       INVALID_INPUT       = 1
+*       OTHERS              = 2
+    .
+    IF sy-subrc <> 0.
+* Implement suitable error handling here
+    ENDIF.
+
+
+    lv_password = lv_password && lt_digit+lv_pos(1).
+
+    lv_max = strlen( lt_special ) - 1.
+
+    CALL FUNCTION 'QF05_RANDOM_INTEGER'
+      EXPORTING
+        ran_int_max = lv_max
+        ran_int_min = 1
+      IMPORTING
+        ran_int     = lv_pos.
+*    EXCEPTIONS
+*      INVALID_INPUT       = 1
+*      OTHERS              = 2
+    .
+    IF sy-subrc <> 0.
+* Implement suitable error handling here
+    ENDIF.
+
+    lv_password = lv_password && lt_special+lv_pos(1).
+
+    lv_max = strlen( lt_all ) - 1.
+
+*-- Fill up to desired length with fully random mix
+    DO lv_len - 4 TIMES.
+
+      CALL FUNCTION 'QF05_RANDOM_INTEGER'
+        EXPORTING
+          ran_int_max = lv_max
+          ran_int_min = 1
+        IMPORTING
+          ran_int     = lv_pos.
+* EXCEPTIONS
+*   INVALID_INPUT       = 1
+*   OTHERS              = 2
+      .
+      IF sy-subrc <> 0.
+* Implement suitable error handling here
+      ENDIF.
+
+      lv_password = lv_password && lt_all+lv_pos(1).
+
+    ENDDO.
+
+*    WRITE: / 'Generated Strong 10-char Password:', lv_password.
+
+*    *--- Unlock user
+    lv_temp_pwd = lv_password .
+
+    user_unl        =    ls_user-bname.
+    user_chg        =    ls_user-bname.
+
+
+    CALL FUNCTION 'BAPI_USER_UNLOCK'
+      EXPORTING
+        username = user_unl
+      TABLES
+        return   = lt_return.
+    .
+*    *--- Set temporary password
+
+
+    lv_bapipwd =  lv_password .
+    ls_passwordx-bapipwd = 'X'.  " Mark password field for change
+
+    CALL FUNCTION 'BAPI_USER_CHANGE'
+      EXPORTING
+        username  = user_chg
+        password  = lv_bapipwd
+        passwordx = ls_passwordx
+*     IMPORTING
+*       GENERATED_PASSWORD       =
+      TABLES
+*       PARAMETER =
+        return    = lt_return2.
+
+*--- Check return messages and display
+    LOOP AT lt_return2 INTO ls_return2.
+      WRITE: / '  BAPI Return:', ls_return2-type, ls_return2-message.
+    ENDLOOP.
+
+
+*--- Only commit if no errors
+    READ TABLE lt_return2 INTO ls_return2 WITH KEY type = 'E'.
+
+    IF sy-subrc <> 0.
+
+
+*    IF sy-subrc = 0.
+      CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+        EXPORTING
+          wait = 'X'.
+
+      WRITE: / '  User unlocked and password reset successfully.'.
+    ELSE.
+      WRITE: / '  ERROR: Failed to reset password for user', ls_user-bname.
+      CONTINUE.
+    ENDIF.
+
+*    *--- Build email message body
+    ls_content-line = 'Dear User,'.
+    APPEND ls_content TO lt_content.
+    CLEAR ls_content.
+
+    ls_content-line = ' '.
+    APPEND ls_content TO lt_content.
+    CLEAR ls_content.
+
+    lv_message = |Your account { ls_user-bname } was locked due to { ls_user-locnt } failed logon attempts.|.
+    ls_content-line = lv_message.
+    APPEND ls_content TO lt_content.
+    CLEAR ls_content.
+
+    ls_content-line = ' '.
+    APPEND ls_content TO lt_content.
+    CLEAR ls_content.
+
+    ls_content-line = 'Your account has been unlocked and a temporary password has been set.'.
+    APPEND ls_content TO lt_content.
+    CLEAR ls_content.
+
+    ls_content-line = ' '.
+    APPEND ls_content TO lt_content.
+    CLEAR ls_content.
+
+    lv_message = |Temporary Password: { lv_temp_pwd }|.
+    ls_content-line = lv_message.
+    APPEND ls_content TO lt_content.
+    CLEAR ls_content.
+
+    ls_content-line = ' '.
+    APPEND ls_content TO lt_content.
+    CLEAR ls_content.
+
+    ls_content-line = 'IMPORTANT: Please change this password immediately after login.'.
+    APPEND ls_content TO lt_content.
+    CLEAR ls_content.
+
+    ls_content-line = ' '.
+    APPEND ls_content TO lt_content.
+    CLEAR ls_content.
+
+    ls_content-line = 'Best regards,'.
+    APPEND ls_content TO lt_content.
+    CLEAR ls_content.
+
+    ls_content-line = 'IT Security Team'.
+    APPEND ls_content TO lt_content.
+
+*    *--- Document info
+    ls_doc_data-obj_name  = 'PWD_RESET'.
+    ls_doc_data-obj_descr = |Account Unlocked - Password Reset|.
+
+*    *--- Receiver details - User's email from ADR6
+    ls_receiver-receiver = lv_user_email.
+    ls_receiver-rec_type = 'U'.  " Internet user
+    APPEND ls_receiver TO lt_receivers.
+
+*    *--- Send the email
+    CALL FUNCTION 'SO_NEW_DOCUMENT_SEND_API1'
+      EXPORTING
+        document_data              = ls_doc_data
+        put_in_outbox              = 'X'
+        commit_work                = 'X'
+      TABLES
+        object_content             = lt_content
+        receivers                  = lt_receivers
+      EXCEPTIONS
+        too_many_receivers         = 1
+        document_not_sent          = 2
+        document_type_not_exist    = 3
+        operation_no_authorization = 4
+        parameter_error            = 5
+        x_error                    = 6
+        enqueue_error              = 7
+        OTHERS                     = 8.
+
+    IF sy-subrc = 0.
+      WRITE: / '  Email sent successfully to:', lv_user_email.
+    ELSE.
+      WRITE: / '  ERROR: Failed to send email - Return code:', sy-subrc.
+    ENDIF.
+
+    WRITE: / '----------------------------------------'.
+
+  ENDLOOP.
+
+*  *--- Commit to send emails from outbox
+  COMMIT WORK.
+  WRITE: / '========================================'.
+  WRITE: / 'Processing complete. All users handled.'.
+
+ELSE.
+  WRITE: / 'No locked users found (UFLAG = 128).'.
+ENDIF.
