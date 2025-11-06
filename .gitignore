@@ -1,0 +1,12 @@
+# Ignore Windows junk
+Thumbs.db
+*.log
+*.tmp
+*.bak
+
+# Ignore VS Code settings
+.vscode/
+
+# Ignore system files
+NTUSER.*
+AppData/
