@@ -1,15 +1,13 @@
 *&---------------------------------------------------------------------*
 *& Report Z_NOTIFY_LOCKED_USERS_NEW_1
 *&---------------------------------------------------------------------*
-*& This code use for lock reset and send mail
+*&
 *&---------------------------------------------------------------------*
-
-
-
 REPORT z_notify_locked_users.
 
 
 DATA: lt_users      TYPE TABLE OF usr02,
+      lt_users_all  TYPE TABLE OF usr02,
       ls_user       TYPE usr02,
       lt_content    TYPE soli_tab,
       ls_content    TYPE soli,
@@ -43,21 +41,42 @@ DATA :user_unl   LIKE bapibname-bapibname,
 
 
 *--- Select locked users (UFLAG = 128 - Locked Due To Incorrect Logons)
-SELECT * FROM usr02 INTO TABLE lt_users
- WHERE uflag = '128'.
+*SELECT * FROM usr02 INTO TABLE lt_users
+* WHERE uflag = '128'.
+" Step 1: Get all users
+
+SELECT * FROM usr02 INTO TABLE lt_users_all.
+
+" Step 2: Keep only users where the 128-bit (wrong logon lock) is set
+
+LOOP AT lt_users_all INTO ls_user.
+
+  " (uflag DIV 128) MOD 2 = 1  <=> bit 128 is ON
+  IF ( ( ls_user-uflag DIV 128 ) MOD 2 ) = 1.
+    APPEND ls_user TO lt_users.
+  ENDIF.
+ENDLOOP.
 
 *0    Not Locked
 *32   Locked Globally By Administrator
 *64   Locked Locally By Administrator
 *128  Locked Due To Incorrect Logons (Limited Term)
 
+
+DATA(lv_count) = lines( lt_users ).
+
 IF sy-subrc = 0.
-  WRITE: / 'Found', sy-dbcnt, 'locked user(s).'.
+*  WRITE: / 'Found', sy-dbcnt, 'locked user(s).'.
+    WRITE: / 'Found', lv_count, 'locked user(s).'.
   WRITE: / '========================================'.
 
   LOOP AT lt_users INTO ls_user.
     CLEAR: lt_content, ls_content, lt_receivers, ls_receiver, ls_doc_data,
            lv_user_email, lv_addrnumber, lv_temp_pwd.
+
+
+    CLEAR: lv_password, lv_bapipwd, ls_passwordx, lv_message.
+    lv_password = ``.   " re-initialize to empty
 
     WRITE: / 'Processing user:', ls_user-bname.
 
@@ -182,7 +201,7 @@ IF sy-subrc = 0.
 
     ENDDO.
 
-*    WRITE: / 'Generated Strong 10-char Password:', lv_password.
+    WRITE: / '  Generated Strong 10-char Password:', lv_password.
 
 *    *--- Unlock user
     lv_temp_pwd = lv_password .
@@ -246,7 +265,8 @@ IF sy-subrc = 0.
     APPEND ls_content TO lt_content.
     CLEAR ls_content.
 
-    lv_message = |Your account { ls_user-bname } was locked due to { ls_user-locnt } failed logon attempts.|.
+*    lv_message = |Your account { ls_user-bname } was locked due to { ls_user-locnt } failed logon attempts.|.
+    lv_message = |Your account { ls_user-bname } was locked due to failed logon attempts.|.
     ls_content-line = lv_message.
     APPEND ls_content TO lt_content.
     CLEAR ls_content.
